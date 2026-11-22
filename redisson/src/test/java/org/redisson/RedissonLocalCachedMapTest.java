@@ -7,6 +7,8 @@ import org.awaitility.Durations;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.redisson.api.RLocalCachedMap;
+import org.redisson.api.RLocalCachedMapReactive;
+import org.redisson.api.RLocalCachedMapRx;
 import org.redisson.api.RMap;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.listener.LocalCacheInvalidateListener;
@@ -118,6 +120,183 @@ public class RedissonLocalCachedMapTest extends BaseMapTest {
         String value = cachedMap.get("a");
         assertThat(value).isNull();
         assertThat(cachedMap.containsKey("a")).isFalse();
+    }
+
+    @Test
+    public void testPublishOnlyInvalidation() {
+        Set<String> issuedCommands = ConcurrentHashMap.newKeySet();
+        Config config = new Config(redisson.getConfig());
+        config.setCommandMapper(command -> {
+            issuedCommands.add(command.toUpperCase(Locale.ROOT));
+            return command;
+        });
+
+        RedissonClient publisherClient = Redisson.create(config);
+        RLocalCachedMap<String, Integer> reader = redisson.getLocalCachedMap(
+                LocalCachedMapOptions.<String, Integer>name("publish-only")
+                        .reconnectionStrategy(ReconnectionStrategy.LOAD));
+        try {
+            RLocalCachedMap<String, Integer> publisher = publisherClient.getLocalCachedMap(
+                    LocalCachedMapOptions.<String, Integer>name("publish-only")
+                            .syncStrategy(SyncStrategy.INVALIDATE_PUBLISH_ONLY)
+                            .reconnectionStrategy(ReconnectionStrategy.LOAD)
+                            .expirationEventPolicy(LocalCachedMapOptions.ExpirationEventPolicy.DONT_SUBSCRIBE)
+                            .cacheSize(-1));
+
+            reader.put("1", 1);
+            reader.put("2", 2);
+            publisher.put("1", 3);
+            Awaitility.await().untilAsserted(() -> assertThat(reader.getCachedMap()).doesNotContainKey("1"));
+            assertThat(reader.get("1")).isEqualTo(3);
+
+            publisher.putAll(Map.of("1", 4, "2", 5));
+            Awaitility.await().untilAsserted(() -> assertThat(reader.getCachedMap()).isEmpty());
+            assertThat(reader.getAll(Set.of("1", "2"))).containsExactlyInAnyOrderEntriesOf(Map.of("1", 4, "2", 5));
+
+            publisher.fastRemove("1");
+            Awaitility.await().untilAsserted(() -> assertThat(reader.getCachedMap()).containsOnlyKeys("2"));
+            assertThat(reader.get("1")).isNull();
+
+            publisher.delete();
+            Awaitility.await().untilAsserted(() -> assertThat(reader.getCachedMap()).isEmpty());
+            assertThat(reader.get("2")).isNull();
+            assertThat(publisher.getCachedMap()).isEmpty();
+            assertThat(issuedCommands).doesNotContain("SUBSCRIBE", "SSUBSCRIBE", "PSUBSCRIBE");
+        } finally {
+            reader.destroy();
+            publisherClient.shutdown();
+        }
+    }
+
+    @Test
+    public void testPublishOnlyClearLocalCache() {
+        RedissonClient readerClient = Redisson.create(redisson.getConfig());
+        RedissonClient otherReaderClient = Redisson.create(redisson.getConfig());
+        RLocalCachedMap<String, Integer> publisher = redisson.getLocalCachedMap(
+                LocalCachedMapOptions.<String, Integer>name("publish-only-clear")
+                        .syncStrategy(SyncStrategy.INVALIDATE_PUBLISH_ONLY)
+                        .expirationEventPolicy(LocalCachedMapOptions.ExpirationEventPolicy.DONT_SUBSCRIBE)
+                        .cacheSize(-1));
+        try {
+            publisher.clearLocalCache();
+            publisher.put("1", 1);
+            RLocalCachedMap<String, Integer> reader = readerClient.getLocalCachedMap(
+                    LocalCachedMapOptions.name("publish-only-clear"));
+            RLocalCachedMap<String, Integer> otherReader = otherReaderClient.getLocalCachedMap(
+                    LocalCachedMapOptions.name("publish-only-clear"));
+            assertThat(reader.get("1")).isEqualTo(1);
+            assertThat(otherReader.get("1")).isEqualTo(1);
+            assertThat(reader.getCachedMap()).containsEntry("1", 1);
+            assertThat(otherReader.getCachedMap()).containsEntry("1", 1);
+
+            publisher.clearLocalCache();
+            assertThat(reader.getCachedMap()).isEmpty();
+            assertThat(otherReader.getCachedMap()).isEmpty();
+            assertThat(publisher.get("1")).isEqualTo(1);
+            assertThat(redisson.getKeys().getKeys()).containsOnly("publish-only-clear");
+        } finally {
+            publisher.destroy();
+            readerClient.shutdown();
+            otherReaderClient.shutdown();
+        }
+    }
+
+    @Test
+    public void testPublishOnlyWithTopicPattern() {
+        Set<String> issuedCommands = ConcurrentHashMap.newKeySet();
+        Config config = new Config(redisson.getConfig());
+        config.setCommandMapper(command -> {
+            issuedCommands.add(command.toUpperCase(Locale.ROOT));
+            return command;
+        });
+        RedissonClient publisherClient = Redisson.create(config);
+        RLocalCachedMap<String, Integer> reader = redisson.getLocalCachedMap(
+                LocalCachedMapOptions.<String, Integer>name("publish-only-pattern").useTopicPattern(true));
+        try {
+            RLocalCachedMap<String, Integer> publisher = publisherClient.getLocalCachedMap("publish-only-pattern",
+                    org.redisson.api.LocalCachedMapOptions.<String, Integer>defaults()
+                            .syncStrategy(org.redisson.api.LocalCachedMapOptions.SyncStrategy.INVALIDATE_PUBLISH_ONLY)
+                            .useTopicPattern(true)
+                            .expirationEventPolicy(org.redisson.api.LocalCachedMapOptions.ExpirationEventPolicy.DONT_SUBSCRIBE)
+                            .cacheSize(-1));
+            reader.put("1", 1);
+            publisher.fastPut("1", 2);
+            Awaitility.await().untilAsserted(() -> assertThat(reader.getCachedMap()).isEmpty());
+            assertThat(reader.get("1")).isEqualTo(2);
+            assertThat(issuedCommands).doesNotContain("SUBSCRIBE", "SSUBSCRIBE", "PSUBSCRIBE");
+
+            publisher.clearLocalCache();
+            assertThat(reader.getCachedMap()).isEmpty();
+        } finally {
+            reader.destroy();
+            publisherClient.shutdown();
+        }
+    }
+
+    @Test
+    public void testPublishOnlyReactiveAndRx() {
+        Set<String> issuedCommands = ConcurrentHashMap.newKeySet();
+        Config config = new Config(redisson.getConfig());
+        config.setCommandMapper(command -> {
+            issuedCommands.add(command.toUpperCase(Locale.ROOT));
+            return command;
+        });
+        RedissonClient publisherClient = Redisson.create(config);
+        RLocalCachedMap<String, Integer> reader = redisson.getLocalCachedMap(
+                LocalCachedMapOptions.name("publish-only-reactive"));
+        try {
+            LocalCachedMapOptions<String, Integer> options = LocalCachedMapOptions.<String, Integer>name("publish-only-reactive")
+                    .syncStrategy(SyncStrategy.INVALIDATE_PUBLISH_ONLY)
+                    .expirationEventPolicy(LocalCachedMapOptions.ExpirationEventPolicy.DONT_SUBSCRIBE)
+                    .cacheSize(-1);
+            RLocalCachedMapReactive<String, Integer> reactive = publisherClient.reactive().getLocalCachedMap(options);
+            RLocalCachedMapRx<String, Integer> rx = publisherClient.rxJava().getLocalCachedMap(options);
+            reader.put("1", 1);
+            reactive.put("1", 2).block();
+            Awaitility.await().untilAsserted(() -> assertThat(reader.getCachedMap()).isEmpty());
+            assertThat(reader.get("1")).isEqualTo(2);
+
+            rx.putAll(Map.of("1", 3)).blockingAwait();
+            Awaitility.await().untilAsserted(() -> assertThat(reader.getCachedMap()).isEmpty());
+            assertThat(reader.get("1")).isEqualTo(3);
+            assertThat(issuedCommands).doesNotContain("SUBSCRIBE", "SSUBSCRIBE", "PSUBSCRIBE");
+        } finally {
+            reader.destroy();
+            publisherClient.shutdown();
+        }
+    }
+
+    @Test
+    public void testPublishOnlyInvalidationInCluster() {
+        testInCluster(clusterClient -> {
+            Set<String> issuedCommands = ConcurrentHashMap.newKeySet();
+            Config config = new Config(clusterClient.getConfig());
+            config.setCommandMapper(command -> {
+                issuedCommands.add(command.toUpperCase(Locale.ROOT));
+                return command;
+            });
+            RedissonClient publisherClient = Redisson.create(config);
+            RLocalCachedMap<String, Integer> reader = clusterClient.getLocalCachedMap(
+                    LocalCachedMapOptions.name("publish-only-cluster"));
+            try {
+                RLocalCachedMap<String, Integer> publisher = publisherClient.getLocalCachedMap(
+                        LocalCachedMapOptions.<String, Integer>name("publish-only-cluster")
+                                .syncStrategy(SyncStrategy.INVALIDATE_PUBLISH_ONLY)
+                                .expirationEventPolicy(LocalCachedMapOptions.ExpirationEventPolicy.DONT_SUBSCRIBE)
+                                .cacheSize(-1));
+                reader.put("1", 1);
+                publisher.putAll(Map.of("1", 2));
+                Awaitility.await().untilAsserted(() -> assertThat(reader.getCachedMap()).isEmpty());
+                assertThat(reader.get("1")).isEqualTo(2);
+                assertThat(issuedCommands).doesNotContain("SUBSCRIBE", "SSUBSCRIBE", "PSUBSCRIBE");
+
+                publisher.clearLocalCache();
+                assertThat(reader.getCachedMap()).isEmpty();
+            } finally {
+                reader.destroy();
+                publisherClient.shutdown();
+            }
+        });
     }
 
     @Test
