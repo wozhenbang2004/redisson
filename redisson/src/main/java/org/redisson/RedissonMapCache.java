@@ -901,6 +901,15 @@ public class RedissonMapCache<K, V> extends RedissonMap<K, V> implements RMapCac
     }
 
     @Override
+    protected RFuture<V> putLoadedValueAsync(K key, V value) {
+        long ttl = ((MapCacheOptions<K, V>) options).getLoaderTimeToLive();
+        if (ttl == 0) {
+            return super.putLoadedValueAsync(key, value);
+        }
+        return putOperationAsync(key, value, System.currentTimeMillis() + ttl, 0, 0, ttl);
+    }
+
+    @Override
     protected RFuture<V> putOperationAsync(K key, V value) {
         String name = getRawName(key);
         String leaseName = getLeaseName(name);

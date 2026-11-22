@@ -1804,13 +1804,17 @@ public class RedissonMap<K, V> extends RedissonExpirable implements RMap<K, V> {
         }).toCompletableFuture();
     }
     
+    protected RFuture<V> putLoadedValueAsync(K key, V value) {
+        return putOperationAsync(key, value);
+    }
+
     private CompletableFuture<V> loadValue(K key, RLock lock, long threadId) {
         if (options.getLoader() != null) {
             return CompletableFuture
                     .supplyAsync(() -> options.getLoader().load(key), getServiceManager().getExecutor())
                     .thenCompose(value -> {
                         if (value != null) {
-                            return putOperationAsync(key, value)
+                            return putLoadedValueAsync(key, value)
                                     .thenApply(r -> value);
                         }
                         return CompletableFuture.completedFuture(null);
@@ -1834,7 +1838,7 @@ public class RedissonMap<K, V> extends RedissonExpirable implements RMap<K, V> {
         }).thenCompose(f -> f)
           .thenCompose(value -> {
             if (value != null) {
-                return (CompletionStage<V>) putOperationAsync(key, (V) value).handle((r, ex) -> {
+                return (CompletionStage<V>) putLoadedValueAsync(key, (V) value).handle((r, ex) -> {
                     RFuture<Void> f = lock.unlockAsync(threadId);
                     if (ex != null) {
                         log.error("Unable to store value by key {} for map {}", key, getRawName(), ex);

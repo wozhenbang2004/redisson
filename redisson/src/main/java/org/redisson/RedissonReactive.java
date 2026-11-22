@@ -408,6 +408,7 @@ public final class RedissonReactive implements RedissonReactiveClient {
         MapCacheOptions<K, V> ops = MapCacheOptions.<K, V>defaults()
                 .loader(params.getLoader())
                 .loaderAsync(params.getLoaderAsync())
+                .loaderTimeToLive(Duration.ofMillis(params.getLoaderTimeToLive()))
                 .writer(params.getWriter())
                 .writerAsync(params.getWriterAsync())
                 .writeBehindDelay(params.getWriteBehindDelay())
