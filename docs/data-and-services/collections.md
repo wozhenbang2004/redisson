@@ -450,6 +450,18 @@ RLocalCachedMap<K, V> map = redisson.getLocalCachedMap("test", options);
 RLocalCachedMapCache<K, V> map = redisson.getLocalCachedMapCache("test", mcoptions);
 ```
 
+For `RMapCache`, use `loaderTimeToLive` to expire entries loaded by `MapLoader` or `MapLoaderAsync`:
+
+```java
+RMapCache<String, String> map = redisson.getMapCache(
+        org.redisson.api.options.MapCacheOptions.<String, String>name("test")
+                .loader(mapLoader)
+                .loaderTimeToLive(Duration.ofMinutes(5)));
+```
+
+This applies to reads and `loadAll` operations. Direct writes retain their own expiration settings.
+Loaded entries do not expire by default; `Duration.ZERO` also selects that behavior.
+
 **Write-through (synchronous) strategy**
 
 When the Map entry is being updated method won't return until 
