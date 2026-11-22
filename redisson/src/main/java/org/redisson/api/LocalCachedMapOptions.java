@@ -76,7 +76,15 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
         /**
          * Update local cache entry across all LocalCachedMap instances on map entry change. Broadcasts full map entry state (Key and Value objects) to all instances.
          */
-        UPDATE
+        UPDATE,
+
+        /**
+         * Publish invalidations on map entry changes without subscribing to cache synchronization messages.
+         * The local cache doesn't receive changes made by other instances.
+         * Use {@code cacheSize(-1)} to avoid retaining stale local entries.
+         * Expiration event subscriptions are configured separately.
+         */
+        INVALIDATE_PUBLISH_ONLY
         
     }
     
@@ -281,6 +289,7 @@ public class LocalCachedMapOptions<K, V> extends MapOptions<K, V> {
      * @param syncStrategy
      *          <p><code>INVALIDATE</code> - Default. Invalidate cache entry across all LocalCachedMap instances on map entry change
      *          <p><code>UPDATE</code> - Insert/update cache entry across all LocalCachedMap instances on map entry change
+     *          <p><code>INVALIDATE_PUBLISH_ONLY</code> - Publish invalidations without receiving cache synchronization messages
      *          <p><code>NONE</code> - No synchronizations on map changes
      * @return LocalCachedMapOptions instance
      */
