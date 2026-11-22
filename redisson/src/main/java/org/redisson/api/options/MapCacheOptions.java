@@ -15,6 +15,8 @@
  */
 package org.redisson.api.options;
 
+import java.time.Duration;
+
 /**
  * {@link org.redisson.api.RMapCache} instance options.
  *
@@ -43,5 +45,17 @@ public interface MapCacheOptions<K, V> extends ExMapOptions<MapCacheOptions<K, V
      */
     MapCacheOptions<K, V> removeEmptyEvictionTask();
 
+    /**
+     * Sets time to live for entries loaded by {@link org.redisson.api.map.MapLoader}
+     * or {@link org.redisson.api.map.MapLoaderAsync} during reads or loadAll operations.
+     * Entries written directly to the map are not affected.
+     *
+     * <p>A zero duration stores loaded entries without expiration.
+     * The default is zero.</p>
+     *
+     * @param timeToLive time to live, either zero or at least one millisecond
+     * @return MapCacheOptions instance
+     */
+    MapCacheOptions<K, V> loaderTimeToLive(Duration timeToLive);
 
 }
