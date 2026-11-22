@@ -344,6 +344,21 @@ map.destroy();
 ```
 
 
+**Publish invalidations without a local cache subscription.**
+
+Short-lived writers can use `INVALIDATE_PUBLISH_ONLY` to invalidate other instances without subscribing to cache synchronization messages. Use `cacheSize(-1)` to avoid retaining local entries that won't receive updates, and `DONT_SUBSCRIBE` to disable the separate expiration event subscription.
+
+```java
+import org.redisson.api.options.LocalCachedMapOptions;
+
+RLocalCachedMap<String, String> map = redisson.getLocalCachedMap(
+        LocalCachedMapOptions.<String, String>name("cache")
+                .syncStrategy(LocalCachedMapOptions.SyncStrategy.INVALIDATE_PUBLISH_ONLY)
+                .cacheSize(-1)
+                .expirationEventPolicy(LocalCachedMapOptions.ExpirationEventPolicy.DONT_SUBSCRIBE));
+map.putAll(data);
+```
+
 **How to load data and avoid invalidation messages traffic.**
 
 Code example:
