@@ -34,6 +34,7 @@ import java.time.Duration;
 public class MapCacheOptions<K, V> extends MapOptions<K, V> {
 
     private boolean removeEmptyEvictionTask;
+    private long loaderTimeToLive;
 
     public static <K, V> MapCacheOptions<K, V> defaults() {
         return new MapCacheOptions<>();
@@ -97,6 +98,29 @@ public class MapCacheOptions<K, V> extends MapOptions<K, V> {
     public MapCacheOptions<K, V> removeEmptyEvictionTask() {
         this.removeEmptyEvictionTask = true;
         return this;
+    }
+
+    /**
+     * Sets time to live for entries loaded by {@link MapLoader} or {@link MapLoaderAsync}
+     * during reads or loadAll operations. Entries written directly to the map are not affected.
+     *
+     * <p>A zero duration stores loaded entries without expiration.
+     * The default is zero.</p>
+     *
+     * @param timeToLive time to live, either zero or at least one millisecond
+     * @return MapCacheOptions instance
+     */
+    public MapCacheOptions<K, V> loaderTimeToLive(Duration timeToLive) {
+        long millis = timeToLive.toMillis();
+        if (timeToLive.isNegative() || (!timeToLive.isZero() && millis == 0)) {
+            throw new IllegalArgumentException("loaderTimeToLive must be zero or at least 1 ms");
+        }
+        loaderTimeToLive = millis;
+        return this;
+    }
+
+    public long getLoaderTimeToLive() {
+        return loaderTimeToLive;
     }
 
 }
