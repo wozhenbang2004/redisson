@@ -130,6 +130,10 @@ public abstract class LocalCacheListener {
             });
         }
 
+        if (options.getSyncStrategy() == SyncStrategy.INVALIDATE_PUBLISH_ONLY) {
+            return;
+        }
+
         if (options.getReconnectionStrategy() != ReconnectionStrategy.NONE) {
             addReconnectionListener();
         }
@@ -165,6 +169,15 @@ public abstract class LocalCacheListener {
     }
     
     void createTopic(String name, CommandAsyncExecutor commandExecutor) {
+        if (options.getSyncStrategy() == SyncStrategy.INVALIDATE_PUBLISH_ONLY) {
+            if (isSharded && !options.isUseTopicPattern()) {
+                invalidationTopic = RedissonShardedTopic.createRaw(LocalCachedMessageCodec.INSTANCE, commandExecutor, getInvalidationTopicName());
+            } else {
+                invalidationTopic = RedissonTopic.createRaw(LocalCachedMessageCodec.INSTANCE, commandExecutor, getInvalidationTopicName());
+            }
+            return;
+        }
+
         if (isSharded) {
             invalidationTopic = RedissonShardedTopic.createRaw(LocalCachedMessageCodec.INSTANCE, commandExecutor, getInvalidationTopicName());
             if (options.isUseTopicPattern()) {
@@ -346,7 +359,7 @@ public abstract class LocalCacheListener {
         if (options.isUseObjectAsCacheKey()) {
             cacheKeyMap.clear();
         }
-        if (syncListenerIds.isEmpty()) {
+        if (syncListenerIds.isEmpty() && options.getSyncStrategy() != SyncStrategy.INVALIDATE_PUBLISH_ONLY) {
             return CompletableFutureWrapper.completedNull();
         }
 
@@ -360,7 +373,11 @@ public abstract class LocalCacheListener {
                                         .thenApply(r -> null);
                     }
 
-                    return semaphore.tryAcquireAsync(res.intValue() - 1, 40, TimeUnit.SECONDS)
+                    int subscribers = res.intValue();
+                    if (options.getSyncStrategy() != SyncStrategy.INVALIDATE_PUBLISH_ONLY) {
+                        subscribers--;
+                    }
+                    return semaphore.tryAcquireAsync(subscribers, 40, TimeUnit.SECONDS)
                                     .thenCompose(r -> semaphore.deleteAsync()
                                                                .thenApply(re -> null));
                 });
