@@ -26,9 +26,122 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 public class RedissonMapCacheTest extends BaseMapTest {
+
+    @Test
+    public void testLoaderTimeToLive() {
+        Map<String, String> source = new ConcurrentHashMap<>();
+        source.put("loaded", "first");
+        Map<String, String> written = new ConcurrentHashMap<>();
+        RMapCache<String, String> map = redisson.getMapCache(
+                org.redisson.api.options.MapCacheOptions.<String, String>name("loaderTTL")
+                        .loader(createMapLoader(source))
+                        .writer(createMapWriter(written))
+                        .loaderTimeToLive(Duration.ofSeconds(1)));
+
+        assertThat(map.get("loaded")).isEqualTo("first");
+        assertThat(map.remainTimeToLive("loaded")).isBetween(1L, 1000L);
+        assertThat(written).isEmpty();
+        assertThat(map.get("missing")).isNull();
+        assertThat(map.containsKey("missing")).isFalse();
+
+        map.put("manual", "value");
+        assertThat(map.remainTimeToLive("manual")).isEqualTo(-1);
+        source.put("loaded", "second");
+        assertThat(map.get("loaded")).isEqualTo("first");
+        await().atMost(Duration.ofSeconds(5)).until(() -> map.remainTimeToLive("loaded") == -2);
+        assertThat(map.get("loaded")).isEqualTo("second");
+        assertThat(map.remainTimeToLive("loaded")).isBetween(1L, 1000L);
+        assertThat(written).containsExactlyEntriesOf(Collections.singletonMap("manual", "value"));
+    }
+
+    @Test
+    public void testAsyncLoaderTimeToLive() {
+        Map<String, String> source = new ConcurrentHashMap<>();
+        source.put("first", "one");
+        source.put("second", "two");
+        RMapCache<String, String> map = redisson.getMapCache("asyncLoaderTTL",
+                MapCacheOptions.<String, String>defaults()
+                        .loaderAsync(createMapLoaderAsync(source))
+                        .loaderTimeToLive(Duration.ofSeconds(1)));
+
+        assertThat(map.getAsync("first").toCompletableFuture().join()).isEqualTo("one");
+        assertThat(map.remainTimeToLive("first")).isBetween(1L, 1000L);
+        map.loadAllAsync(false, 2).toCompletableFuture().join();
+        assertThat(map.remainTimeToLive("second")).isBetween(1L, 1000L);
+        source.put("first", "updated");
+        await().atMost(Duration.ofSeconds(5)).until(() -> map.remainTimeToLive("first") == -2);
+        assertThat(map.getAsync("first").toCompletableFuture().join()).isEqualTo("updated");
+    }
+
+    @Test
+    public void testLoaderTimeToLiveLoadAll() {
+        Map<String, String> source = new ConcurrentHashMap<>();
+        source.put("new", "loaded");
+        source.put("existing", "replacement");
+        RMapCache<String, String> map = redisson.getMapCache(
+                org.redisson.api.options.MapCacheOptions.<String, String>name("loadAllTTL")
+                        .loader(createMapLoader(source))
+                        .loaderTimeToLive(Duration.ofSeconds(10)));
+        map.put("existing", "manual");
+
+        map.loadAll(false, 2);
+        assertThat(map.get("new")).isEqualTo("loaded");
+        assertThat(map.remainTimeToLive("new")).isBetween(1L, 10000L);
+        assertThat(map.get("existing")).isEqualTo("manual");
+        assertThat(map.remainTimeToLive("existing")).isEqualTo(-1);
+
+        map.loadAll(Collections.singleton("existing"), true, 1);
+        assertThat(map.get("existing")).isEqualTo("replacement");
+        assertThat(map.remainTimeToLive("existing")).isBetween(1L, 10000L);
+    }
+
+    @Test
+    public void testLoaderTimeToLiveDefault() {
+        Map<String, String> source = Collections.singletonMap("key", "value");
+        RMapCache<String, String> defaults = redisson.getMapCache("loaderDefaults",
+                MapCacheOptions.<String, String>defaults().loader(createMapLoader(source)));
+        RMapCache<String, String> zero = redisson.getMapCache(
+                org.redisson.api.options.MapCacheOptions.<String, String>name("loaderZero")
+                        .loader(createMapLoader(source))
+                        .loaderTimeToLive(Duration.ZERO));
+
+        assertThat(defaults.get("key")).isEqualTo("value");
+        assertThat(defaults.remainTimeToLive("key")).isEqualTo(-1);
+        assertThat(zero.get("key")).isEqualTo("value");
+        assertThat(zero.remainTimeToLive("key")).isEqualTo(-1);
+    }
+
+    @Test
+    public void testLoaderTimeToLiveReactiveAndRx() {
+        Map<String, String> source = Collections.singletonMap("key", "value");
+        RMapCacheReactive<String, String> reactive = redisson.reactive().getMapCache(
+                org.redisson.api.options.MapCacheOptions.<String, String>name("reactiveLoaderTTL")
+                        .loaderAsync(createMapLoaderAsync(source))
+                        .loaderTimeToLive(Duration.ofSeconds(10)));
+        assertThat(reactive.get("key").block()).isEqualTo("value");
+        assertThat(reactive.remainTimeToLive("key").block()).isBetween(1L, 10000L);
+
+        RMapCacheRx<String, String> rx = redisson.rxJava().getMapCache(
+                org.redisson.api.options.MapCacheOptions.<String, String>name("rxLoaderTTL")
+                        .loader(createMapLoader(source))
+                        .loaderTimeToLive(Duration.ofSeconds(10)));
+        assertThat(rx.get("key").blockingGet()).isEqualTo("value");
+        assertThat(rx.remainTimeToLive("key").blockingGet()).isBetween(1L, 10000L);
+    }
+
+    @Test
+    public void testLoaderTimeToLiveValidation() {
+        for (Duration ttl : Arrays.asList(Duration.ofMillis(-1), Duration.ofNanos(1))) {
+            assertThatThrownBy(() -> MapCacheOptions.defaults().loaderTimeToLive(ttl))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> org.redisson.api.options.MapCacheOptions.name("map").loaderTimeToLive(ttl))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
 
     public static class SimpleEntryCreatedListener implements EntryCreatedListener {
 
